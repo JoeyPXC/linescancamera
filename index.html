@@ -151,14 +151,16 @@
     visibility:hidden;
   }
   #scanBadge.live{visibility:visible;}
-  #scanDot{width:9px;height:9px;border-radius:50%;background:var(--track-red);animation:blink 1s infinite;}
+  #scanDot{width:9px;height:9px;border-radius:50%;background:var(--track-red);}
+  #scanDot.blink{animation:blink 1s infinite;}
+  #scanBadge.paused #scanDot{background:var(--gold);}
   @keyframes blink{50%{opacity:.25;}}
   #elapsedLabel{font-variant-numeric:tabular-nums;}
 
   /* ---------- Bottom controls ---------- */
   #bottomBar{
     position:fixed;bottom:0;left:0;right:0;
-    display:flex;flex-direction:column;align-items:center;gap:14px;
+    display:flex;flex-direction:row;align-items:center;justify-content:center;gap:12px;
     padding:14px 18px calc(20px + env(safe-area-inset-bottom));
     background:linear-gradient(transparent,rgba(0,0,0,.6));
     z-index:20;
@@ -173,7 +175,14 @@
     padding:16px 30px;
     cursor:pointer;
   }
-  .pillBtn.stop{background:var(--paper);color:var(--ink);}
+  .pillBtn.capturing{background:var(--paper);color:var(--ink);} /* actively capturing — tap to pause */
+  .pillBtn.paused{background:var(--gold);color:var(--ink);}     /* paused — tap to resume */
+  .pillBtn.finish{
+    background:transparent;
+    color:var(--paper);
+    border:1px solid rgba(244,241,234,.4);
+    padding:16px 22px;
+  }
 
   /* ---------- Permission overlay ---------- */
   #permOverlay{
@@ -227,6 +236,7 @@
 
 <div id="bottomBar">
   <button id="mainBtn" class="pillBtn">Start Scan</button>
+  <button id="finishBtn" class="pillBtn finish" style="display:none;">Finish</button>
 </div>
 
 <div id="resultOverlay">
@@ -258,10 +268,12 @@
 
   const flipBtn = document.getElementById('flipBtn');
   const scanBadge = document.getElementById('scanBadge');
+  const scanDot = document.getElementById('scanDot');
   const elapsedLabel = document.getElementById('elapsedLabel');
 
   const bottomBar = document.getElementById('bottomBar');
   const mainBtn = document.getElementById('mainBtn');
+  const finishBtn = document.getElementById('finishBtn');
 
   const resultOverlay = document.getElementById('resultOverlay');
   const resultImg = document.getElementById('resultImg');
@@ -272,13 +284,19 @@
   let facingMode = 'environment';
   let cameraStream = null;
   let phase = 'setup'; // setup | scanning | done
+  let capturing = false; // only meaningful while phase === 'scanning'
   let markerFrac = 0.5; // 0..1 fraction of displayed video width
 
   const COLUMN_WIDTH = 5; // px drawn per captured frame — stretches our ~30fps sampling into a readable image
   let writeX = 0;
-  let scanStartPerf = 0;
+  let captureActiveMs = 0;   // accumulated active-capture time, excluding paused stretches
+  let activeSegmentStart = 0;
   let scanRAF = null;
   let lastResultBlobUrl = null;
+
+  function currentActiveMs() {
+    return captureActiveMs + (capturing ? performance.now() - activeSegmentStart : 0);
+  }
 
   // ---------- Camera setup ----------
 
@@ -320,12 +338,16 @@
 
   flipBtn.addEventListener('click', flipCamera);
   permBtn.addEventListener('click', startCamera);
-  window.addEventListener('resize', () => { if (phase === 'setup') updateMarkerVisual(); });
+  window.addEventListener('resize', () => { if (markerAdjustable()) updateMarkerVisual(); });
 
-  // ---------- Finish-line marker (setup phase) ----------
+  // ---------- Finish-line marker (setup phase, and re-checkable during a pause) ----------
+
+  function markerAdjustable() {
+    return phase === 'setup' || (phase === 'scanning' && !capturing);
+  }
 
   function updateMarkerVisual() {
-    if (phase !== 'setup') return;
+    if (!markerAdjustable()) return;
     const rect = video.getBoundingClientRect();
     lineMarker.style.left = Math.round(rect.left + markerFrac * rect.width) + 'px';
     lineMarker.style.top = rect.top + 'px';
@@ -345,13 +367,13 @@
   }
 
   setupStage.addEventListener('touchstart', e => {
-    if (phase === 'setup') setMarkerFromClientX(e.touches[0].clientX);
+    if (markerAdjustable()) setMarkerFromClientX(e.touches[0].clientX);
   }, { passive: true });
   setupStage.addEventListener('touchmove', e => {
-    if (phase === 'setup') { setMarkerFromClientX(e.touches[0].clientX); }
+    if (markerAdjustable()) { setMarkerFromClientX(e.touches[0].clientX); }
   }, { passive: true });
   setupStage.addEventListener('mousedown', e => {
-    if (phase === 'setup') setMarkerFromClientX(e.clientX);
+    if (markerAdjustable()) setMarkerFromClientX(e.clientX);
   });
 
   // ---------- Scan capture ----------
@@ -376,14 +398,14 @@
   }
 
   function scanTick() {
-    if (phase !== 'scanning') return;
+    if (!capturing) return;
     if (video.readyState >= 2 && video.videoWidth) {
       const sx = Math.min(video.videoWidth - 1, Math.floor(markerFrac * video.videoWidth));
       growScanCanvasIfNeeded(writeX + COLUMN_WIDTH);
       scanCtx.drawImage(video, sx, 0, 1, video.videoHeight, writeX, 0, COLUMN_WIDTH, scanCanvas.height);
       writeX += COLUMN_WIDTH;
       scanViewport.scrollLeft = scanViewport.scrollWidth;
-      elapsedLabel.textContent = formatElapsed(performance.now() - scanStartPerf);
+      elapsedLabel.textContent = formatElapsed(currentActiveMs());
     }
     scanRAF = requestAnimationFrame(scanTick);
   }
@@ -393,25 +415,65 @@
     scanCanvas.width = 4000;
     scanCanvas.height = video.videoHeight;
     writeX = 0;
-    scanStartPerf = performance.now();
+    captureActiveMs = 0;
 
     phase = 'scanning';
+    finishBtn.style.display = 'inline-block';
+    beginCapturing();
+  }
+
+  function beginCapturing() {
+    capturing = true;
+    activeSegmentStart = performance.now();
+
     setupStage.classList.add('hidden');
     lineMarker.style.display = 'none';
     markerHint.style.display = 'none';
     scanViewport.classList.add('show');
     pipWrap.style.display = 'block';
+
     scanBadge.classList.add('live');
-    mainBtn.textContent = 'Stop';
-    mainBtn.classList.add('stop');
+    scanBadge.classList.remove('paused');
+    scanDot.classList.add('blink');
+
+    mainBtn.textContent = 'Pause';
+    mainBtn.classList.add('capturing');
+    mainBtn.classList.remove('paused');
 
     scanRAF = requestAnimationFrame(scanTick);
   }
 
-  function stopScan() {
-    phase = 'done';
+  function pauseCapturing() {
+    capturing = false;
+    captureActiveMs += performance.now() - activeSegmentStart;
     if (scanRAF) cancelAnimationFrame(scanRAF);
-    scanBadge.classList.remove('live');
+
+    // Show the full live camera (with the finish-line marker, re-adjustable)
+    // so you can watch and wait for the group to come back around.
+    scanViewport.classList.remove('show');
+    pipWrap.style.display = 'none';
+    setupStage.classList.remove('hidden');
+    lineMarker.style.display = 'block';
+    updateMarkerVisual();
+
+    scanBadge.classList.add('paused');
+    scanDot.classList.remove('blink');
+
+    mainBtn.textContent = 'Resume';
+    mainBtn.classList.add('paused');
+    mainBtn.classList.remove('capturing');
+  }
+
+  function finishScan() {
+    if (phase !== 'scanning') return;
+    phase = 'done';
+    if (capturing) {
+      captureActiveMs += performance.now() - activeSegmentStart;
+      capturing = false;
+    }
+    if (scanRAF) cancelAnimationFrame(scanRAF);
+    scanBadge.classList.remove('live', 'paused');
+    finishBtn.style.display = 'none';
 
     // Crop to only the portion actually drawn
     const finalCanvas = document.createElement('canvas');
@@ -430,20 +492,26 @@
 
   mainBtn.addEventListener('click', () => {
     if (phase === 'setup') startScan();
-    else if (phase === 'scanning') stopScan();
+    else if (phase === 'scanning' && capturing) pauseCapturing();
+    else if (phase === 'scanning' && !capturing) beginCapturing();
   });
+  finishBtn.addEventListener('click', finishScan);
 
   function resetToSetup() {
     phase = 'setup';
+    capturing = false;
     writeX = 0;
+    captureActiveMs = 0;
     resultOverlay.classList.remove('show');
     scanViewport.classList.remove('show');
     pipWrap.style.display = 'none';
     setupStage.classList.remove('hidden');
     lineMarker.style.display = 'block';
     markerHint.style.display = 'block';
+    finishBtn.style.display = 'none';
     mainBtn.textContent = 'Start Scan';
-    mainBtn.classList.remove('stop');
+    mainBtn.classList.remove('capturing', 'paused');
+    scanBadge.classList.remove('live', 'paused');
     elapsedLabel.textContent = '0:00';
     updateMarkerVisual();
   }
