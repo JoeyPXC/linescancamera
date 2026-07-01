@@ -213,6 +213,20 @@
     padding:16px 22px;
   }
 
+  #installBtn{
+    position:fixed;
+    top:calc(10px + env(safe-area-inset-top));
+    left:50%;
+    transform:translateX(-50%);
+    display:none;
+    font-family:var(--mono);
+    font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+    background:var(--track-red);color:var(--paper);
+    border:none;border-radius:20px;
+    padding:8px 16px;
+    z-index:25;
+  }
+
   /* ---------- Permission overlay ---------- */
   #permOverlay{
     position:fixed;inset:0;
@@ -235,6 +249,8 @@
 </style>
 </head>
 <body>
+
+<button id="installBtn">Install app</button>
 
 <div id="permOverlay">
   <h1>Line Scan Camera</h1>
@@ -670,10 +686,19 @@
 
   // ---------- PWA install prompt ----------
 
+  const installBtn = document.getElementById('installBtn');
   let deferredPrompt = null;
   window.addEventListener('beforeinstallprompt', e => {
     e.preventDefault();
     deferredPrompt = e;
+    installBtn.style.display = 'block';
+  });
+  installBtn.addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    installBtn.style.display = 'none';
   });
 
   if ('serviceWorker' in navigator) {
