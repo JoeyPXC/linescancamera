@@ -1,1 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#161513">
+<title>Line Scan Camera</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+  :root{
+    --track-red:#c1272d;
+    --ink:#161513;
+    --paper:#f4f1ea;
+    --gold:#c9a227;
+    --mono: 'Consolas','SFMono-Regular',Menlo,monospace;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0;padding:0;width:100%;height:100%;
+    background:#000;overflow:hidden;
+    font-family:var(--mono);color:var(--paper);
+  }
 
+  /* ---------- Setup (live camera + finish-line marker) ---------- */
+  #setupStage{
+    position:fixed;inset:0;
+    display:flex;align-items:center;justify-content:center;
+    background:#000;
+  }
+  #setupStage.hidden{display:none;}
+  video{
+    max-width:100%;max-height:100%;
+    width:auto;height:auto;
+    display:block;
+  }
+  #lineMarker{
+    position:fixed;
+    top:0;width:0;
+    border-left:3px solid var(--track-red);
+    box-shadow:0 0 0 1px rgba(0,0,0,.6);
+    pointer-events:none;
+    z-index:15;
+  }
+  #markerHint{
+    position:fixed;
+    left:50%;
+    bottom:calc(150px + env(safe-area-inset-bottom));
+    transform:translateX(-50%);
+    font-family:var(--mono);
+    font-size:12px;
+    background:rgba(0,0,0,.55);
+    color:var(--paper);
+    padding:8px 14px;
+    border-radius:16px;
+    text-align:center;
+    z-index:16;
+    pointer-events:none;
+  }
+
+  /* ---------- Scan viewport (the growing strip) ---------- */
+  #scanViewport{
+    position:fixed;inset:0;
+    overflow-x:auto;overflow-y:hidden;
+    background:#000;
+    display:none;
+  }
+  #scanViewport.show{display:block;}
+  #scanCanvas{
+    height:100%;width:auto;
+    display:block;
+  }
+  #pipWrap{
+    position:fixed;
+    top:calc(56px + env(safe-area-inset-top));
+    right:12px;
+    width:110px;height:110px;
+    border-radius:8px;
+    overflow:hidden;
+    border:2px solid rgba(244,241,234,.5);
+    z-index:25;
+    background:#000;
+  }
+  #pipVideo{
+    width:100%;height:100%;
+    object-fit:cover;
+    display:block;
+  }
+  #pipLine{
+    position:absolute;top:0;bottom:0;width:0;
+    border-left:2px solid var(--track-red);
+  }
+
+  /* ---------- Result screen ---------- */
+  #resultOverlay{
+    position:fixed;inset:0;
+    background:var(--ink);
+    display:none;
+    flex-direction:column;
+    z-index:40;
+  }
+  #resultOverlay.show{display:flex;}
+  #resultScroll{
+    flex:1;min-height:0;
+    overflow:auto;
+    background:#000;
+    display:flex;align-items:center;
+  }
+  #resultImg{
+    height:100%;width:auto;
+    display:block;
+  }
+  #resultBar{
+    padding:14px 18px calc(18px + env(safe-area-inset-bottom));
+    display:flex;gap:10px;flex-wrap:wrap;justify-content:center;
+  }
+  #resultBar button{
+    font-family:var(--mono);
+    font-size:13px;letter-spacing:.05em;text-transform:uppercase;
+    border:none;border-radius:6px;
+    padding:14px 18px;
+    cursor:pointer;
+  }
+  #shareBtn{background:var(--track-red);color:var(--paper);}
+  #saveBtn{background:var(--paper);color:var(--ink);}
+  #newScanBtn{background:transparent;color:#c9c4b8;border:1px solid #4a4640 !important;}
+
+  /* ---------- Top bar / badges ---------- */
+  #topBar{
+    position:fixed;top:0;left:0;right:0;
+    display:flex;justify-content:space-between;align-items:center;
+    padding:calc(10px + env(safe-area-inset-top)) 14px 10px;
+    background:linear-gradient(rgba(0,0,0,.55),transparent);
+    z-index:20;
+    pointer-events:none;
+  }
+  #topBar > *{pointer-events:auto;}
+  .iconBtn{
+    width:44px;height:44px;border-radius:50%;border:none;
+    background:rgba(0,0,0,.35);color:var(--paper);
+    font-size:20px;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;
+  }
+  .iconBtn:active{background:rgba(193,39,45,.6);}
+  #scanBadge{
+    font-size:12px;letter-spacing:.08em;
+    padding:6px 12px;border-radius:20px;
+    background:rgba(0,0,0,.4);
+    display:flex;align-items:center;gap:6px;
+    visibility:hidden;
+  }
+  #scanBadge.live{visibility:visible;}
+  #scanDot{width:9px;height:9px;border-radius:50%;background:var(--track-red);animation:blink 1s infinite;}
+  @keyframes blink{50%{opacity:.25;}}
+  #elapsedLabel{font-variant-numeric:tabular-nums;}
+
+  /* ---------- Bottom controls ---------- */
+  #bottomBar{
+    position:fixed;bottom:0;left:0;right:0;
+    display:flex;flex-direction:column;align-items:center;gap:14px;
+    padding:14px 18px calc(20px + env(safe-area-inset-bottom));
+    background:linear-gradient(transparent,rgba(0,0,0,.6));
+    z-index:20;
+  }
+  #bottomBar.hidden{display:none;}
+  .pillBtn{
+    font-family:var(--mono);
+    font-size:14px;letter-spacing:.05em;text-transform:uppercase;
+    border:none;
+    background:var(--track-red);color:var(--paper);
+    border-radius:26px;
+    padding:16px 30px;
+    cursor:pointer;
+  }
+  .pillBtn.stop{background:var(--paper);color:var(--ink);}
+
+  /* ---------- Permission overlay ---------- */
+  #permOverlay{
+    position:fixed;inset:0;
+    background:var(--ink);color:var(--paper);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:32px;
+    z-index:50;
+  }
+  #permOverlay.hidden{display:none;}
+  #permOverlay h1{font-size:20px;margin:0 0 12px;}
+  #permOverlay p{font-size:14px;line-height:1.6;color:#c9c4b8;max-width:46ch;margin:0 0 20px;}
+  #permOverlay button{
+    font-family:var(--mono);
+    font-size:14px;letter-spacing:.05em;text-transform:uppercase;
+    background:var(--track-red);color:var(--paper);
+    border:none;border-radius:6px;
+    padding:14px 26px;
+    cursor:pointer;
+  }
+</style>
+</head>
+<body>
+
+<div id="permOverlay">
+  <h1>Line Scan Camera</h1>
+  <p>A "poor man's" finish-line camera: point it at the line, and it builds a scrolling image out of thin slices of video over time &mdash; the same idea as a real photo-finish camera, just built from ordinary video frames instead of a true high-speed sensor. Good for reading order and rough timing casually, not official results.</p>
+  <button id="permBtn">Enable camera</button>
+  <p id="permError" style="color:#e78a8e;margin-top:16px;"></p>
+</div>
+
+<div id="setupStage">
+  <video id="video" playsinline muted autoplay></video>
+</div>
+<div id="lineMarker"></div>
+<div id="markerHint">Drag the red line onto the finish line, then tap Start Scan</div>
+
+<div id="scanViewport">
+  <canvas id="scanCanvas"></canvas>
+</div>
+<div id="pipWrap">
+  <video id="pipVideo" playsinline muted autoplay></video>
+  <div id="pipLine"></div>
+</div>
+
+<div id="topBar">
+  <button id="flipBtn" class="iconBtn" title="Flip camera">&#8635;</button>
+  <div id="scanBadge"><span id="scanDot"></span><span id="elapsedLabel">0:00</span></div>
+  <div style="width:44px;"></div>
+</div>
+
+<div id="bottomBar">
+  <button id="mainBtn" class="pillBtn">Start Scan</button>
+</div>
+
+<div id="resultOverlay">
+  <div id="resultScroll"><img id="resultImg" alt="Finish line scan"></div>
+  <div id="resultBar">
+    <button id="shareBtn">Share</button>
+    <button id="saveBtn">Save to device</button>
+    <button id="newScanBtn">New scan</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const video = document.getElementById('video');
+  const pipVideo = document.getElementById('pipVideo');
+  const setupStage = document.getElementById('setupStage');
+  const lineMarker = document.getElementById('lineMarker');
+  const markerHint = document.getElementById('markerHint');
+  const pipLine = document.getElementById('pipLine');
+
+  const scanViewport = document.getElementById('scanViewport');
+  const scanCanvas = document.getElementById('scanCanvas');
+  const scanCtx = scanCanvas.getContext('2d');
+  const pipWrap = document.getElementById('pipWrap');
+
+  const permOverlay = document.getElementById('permOverlay');
+  const permBtn = document.getElementById('permBtn');
+  const permError = document.getElementById('permError');
+
+  const flipBtn = document.getElementById('flipBtn');
+  const scanBadge = document.getElementById('scanBadge');
+  const elapsedLabel = document.getElementById('elapsedLabel');
+
+  const bottomBar = document.getElementById('bottomBar');
+  const mainBtn = document.getElementById('mainBtn');
+
+  const resultOverlay = document.getElementById('resultOverlay');
+  const resultImg = document.getElementById('resultImg');
+  const shareBtn = document.getElementById('shareBtn');
+  const saveBtn = document.getElementById('saveBtn');
+  const newScanBtn = document.getElementById('newScanBtn');
+
+  let facingMode = 'environment';
+  let cameraStream = null;
+  let phase = 'setup'; // setup | scanning | done
+  let markerFrac = 0.5; // 0..1 fraction of displayed video width
+
+  const COLUMN_WIDTH = 5; // px drawn per captured frame — stretches our ~30fps sampling into a readable image
+  let writeX = 0;
+  let scanStartPerf = 0;
+  let scanRAF = null;
+  let lastResultBlobUrl = null;
+
+  // ---------- Camera setup ----------
+
+  async function startCamera() {
+    if (!window.isSecureContext) {
+      permError.textContent = 'This page must be served over HTTPS (or localhost) for the camera to work.';
+      return;
+    }
+    try {
+      const isLandscape = window.innerWidth >= window.innerHeight;
+      const targetAspect = isLandscape ? 16 / 9 : 9 / 16;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode,
+          aspectRatio: { ideal: targetAspect },
+          width: { ideal: isLandscape ? 1920 : 1080 },
+          height: { ideal: isLandscape ? 1080 : 1920 },
+          frameRate: { ideal: 30 }
+        },
+        audio: false
+      });
+      cameraStream = stream;
+      video.srcObject = stream;
+      pipVideo.srcObject = stream;
+      await video.play();
+      permOverlay.classList.add('hidden');
+      updateMarkerVisual();
+    } catch (err) {
+      permError.textContent = 'Could not access camera: ' + (err.message || err.name);
+    }
+  }
+
+  async function flipCamera() {
+    if (phase !== 'setup') return; // keep it simple: no flipping mid-scan
+    facingMode = facingMode === 'environment' ? 'user' : 'environment';
+    if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());
+    await startCamera();
+  }
+
+  flipBtn.addEventListener('click', flipCamera);
+  permBtn.addEventListener('click', startCamera);
+  window.addEventListener('resize', () => { if (phase === 'setup') updateMarkerVisual(); });
+
+  // ---------- Finish-line marker (setup phase) ----------
+
+  function updateMarkerVisual() {
+    if (phase !== 'setup') return;
+    const rect = video.getBoundingClientRect();
+    lineMarker.style.left = Math.round(rect.left + markerFrac * rect.width) + 'px';
+    lineMarker.style.top = rect.top + 'px';
+    lineMarker.style.height = rect.height + 'px';
+
+    const pipRect = pipVideo.getBoundingClientRect();
+    pipLine.style.left = Math.round(markerFrac * pipRect.width) + 'px';
+  }
+
+  function setMarkerFromClientX(clientX) {
+    const rect = video.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    let frac = (clientX - rect.left) / rect.width;
+    frac = Math.min(1, Math.max(0, frac));
+    markerFrac = frac;
+    updateMarkerVisual();
+  }
+
+  setupStage.addEventListener('touchstart', e => {
+    if (phase === 'setup') setMarkerFromClientX(e.touches[0].clientX);
+  }, { passive: true });
+  setupStage.addEventListener('touchmove', e => {
+    if (phase === 'setup') { setMarkerFromClientX(e.touches[0].clientX); }
+  }, { passive: true });
+  setupStage.addEventListener('mousedown', e => {
+    if (phase === 'setup') setMarkerFromClientX(e.clientX);
+  });
+
+  // ---------- Scan capture ----------
+
+  function growScanCanvasIfNeeded(neededWidth) {
+    if (neededWidth <= scanCanvas.width) return;
+    let newWidth = scanCanvas.width;
+    while (newWidth < neededWidth) newWidth *= 2;
+    const temp = document.createElement('canvas');
+    temp.width = scanCanvas.width;
+    temp.height = scanCanvas.height;
+    temp.getContext('2d').drawImage(scanCanvas, 0, 0);
+    scanCanvas.width = newWidth; // resizing clears the canvas
+    scanCtx.drawImage(temp, 0, 0);
+  }
+
+  function formatElapsed(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec - m * 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function scanTick() {
+    if (phase !== 'scanning') return;
+    if (video.readyState >= 2 && video.videoWidth) {
+      const sx = Math.min(video.videoWidth - 1, Math.floor(markerFrac * video.videoWidth));
+      growScanCanvasIfNeeded(writeX + COLUMN_WIDTH);
+      scanCtx.drawImage(video, sx, 0, 1, video.videoHeight, writeX, 0, COLUMN_WIDTH, scanCanvas.height);
+      writeX += COLUMN_WIDTH;
+      scanViewport.scrollLeft = scanViewport.scrollWidth;
+      elapsedLabel.textContent = formatElapsed(performance.now() - scanStartPerf);
+    }
+    scanRAF = requestAnimationFrame(scanTick);
+  }
+
+  function startScan() {
+    if (!video.videoWidth) return;
+    scanCanvas.width = 4000;
+    scanCanvas.height = video.videoHeight;
+    writeX = 0;
+    scanStartPerf = performance.now();
+
+    phase = 'scanning';
+    setupStage.classList.add('hidden');
+    lineMarker.style.display = 'none';
+    markerHint.style.display = 'none';
+    scanViewport.classList.add('show');
+    pipWrap.style.display = 'block';
+    scanBadge.classList.add('live');
+    mainBtn.textContent = 'Stop';
+    mainBtn.classList.add('stop');
+
+    scanRAF = requestAnimationFrame(scanTick);
+  }
+
+  function stopScan() {
+    phase = 'done';
+    if (scanRAF) cancelAnimationFrame(scanRAF);
+    scanBadge.classList.remove('live');
+
+    // Crop to only the portion actually drawn
+    const finalCanvas = document.createElement('canvas');
+    finalCanvas.width = Math.max(1, writeX);
+    finalCanvas.height = scanCanvas.height;
+    finalCanvas.getContext('2d').drawImage(scanCanvas, 0, 0);
+
+    finalCanvas.toBlob(blob => {
+      if (lastResultBlobUrl) URL.revokeObjectURL(lastResultBlobUrl);
+      lastResultBlobUrl = URL.createObjectURL(blob);
+      resultImg.src = lastResultBlobUrl;
+      window.__lastBlob = blob;
+      resultOverlay.classList.add('show');
+    }, 'image/png');
+  }
+
+  mainBtn.addEventListener('click', () => {
+    if (phase === 'setup') startScan();
+    else if (phase === 'scanning') stopScan();
+  });
+
+  function resetToSetup() {
+    phase = 'setup';
+    writeX = 0;
+    resultOverlay.classList.remove('show');
+    scanViewport.classList.remove('show');
+    pipWrap.style.display = 'none';
+    setupStage.classList.remove('hidden');
+    lineMarker.style.display = 'block';
+    markerHint.style.display = 'block';
+    mainBtn.textContent = 'Start Scan';
+    mainBtn.classList.remove('stop');
+    elapsedLabel.textContent = '0:00';
+    updateMarkerVisual();
+  }
+  newScanBtn.addEventListener('click', resetToSetup);
+
+  // ---------- Result actions ----------
+
+  function isIOS() {
+    return /iP(hone|od|ad)/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+  if (isIOS()) saveBtn.textContent = 'Save (via Share Sheet)';
+
+  function makeImageFile() {
+    const blob = window.__lastBlob;
+    if (!blob) return null;
+    return new File([blob], `finish-scan-${Date.now()}.png`, { type: 'image/png' });
+  }
+
+  async function shareFile() {
+    const file = makeImageFile();
+    if (!file) return false;
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'Finish line scan' }); return true; }
+      catch (e) { return false; }
+    }
+    return false;
+  }
+
+  function downloadBlob() {
+    if (!lastResultBlobUrl) return;
+    const a = document.createElement('a');
+    a.href = lastResultBlobUrl;
+    a.download = `finish-scan-${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  shareBtn.addEventListener('click', async () => {
+    const file = makeImageFile();
+    if (!file) return;
+    if (navigator.canShare && navigator.canShare({ files: [file] })) await shareFile();
+    else downloadBlob();
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    if (isIOS()) {
+      const shared = await shareFile();
+      if (!shared) alert('Tap Share instead, then choose "Save Image" to save it to Photos.');
+      return;
+    }
+    downloadBlob();
+  });
+
+  // ---------- PWA install prompt ----------
+
+  let deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    deferredPrompt = e;
+  });
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+})();
+</script>
+</body>
+</html>

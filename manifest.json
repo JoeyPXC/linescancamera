@@ -1,0 +1,15 @@
+{
+  "name": "Line Scan Camera",
+  "short_name": "LineScan",
+  "description": "A poor man's finish-line camera — builds a scrolling slit-scan image from live video, casual/practice use only.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#161513",
+  "theme_color": "#161513",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
