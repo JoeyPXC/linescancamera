@@ -330,15 +330,15 @@
 
   const COLUMN_WIDTH = 5; // px drawn per captured frame — stretches our ~30fps sampling into a readable image
   let writeX = 0;
-  let captureActiveMs = 0;   // accumulated active-capture time, excluding paused stretches
-  let activeSegmentStart = 0;
   let scanRAF = null;
+  let scanStartPerf = 0;     // real wall-clock moment Start Scan was tapped — never resets on pause
+  let uiClockRAF = null;     // separate loop that keeps the on-screen elapsed readout ticking through pauses
   let lastResultBlobUrl = null;
-  let columnTimestamps = []; // columnTimestamps[i] = active-capture ms elapsed when column block i was drawn
+  let columnTimestamps = []; // columnTimestamps[i] = true race-elapsed ms when column block i was drawn
   let zeroMs = 0;             // hash-line reference point ("Set Zero Here")
 
-  function currentActiveMs() {
-    return captureActiveMs + (capturing ? performance.now() - activeSegmentStart : 0);
+  function raceElapsedMs() {
+    return performance.now() - scanStartPerf;
   }
 
   // ---------- Camera setup ----------
@@ -446,12 +446,21 @@
       const sx = Math.min(video.videoWidth - 1, Math.floor(markerFrac * video.videoWidth));
       growScanCanvasIfNeeded(writeX + COLUMN_WIDTH);
       scanCtx.drawImage(video, sx, 0, 1, video.videoHeight, writeX, 0, COLUMN_WIDTH, scanCanvas.height);
-      columnTimestamps.push(currentActiveMs());
+      columnTimestamps.push(raceElapsedMs());
       writeX += COLUMN_WIDTH;
       scanViewport.scrollLeft = scanViewport.scrollWidth;
-      elapsedLabel.textContent = formatElapsed(currentActiveMs());
     }
     scanRAF = requestAnimationFrame(scanTick);
+  }
+
+  // Keeps the on-screen elapsed readout ticking the whole time the scan is
+  // "in progress" (from Start Scan to Finish) — including through pauses,
+  // since the real race/workout clock never actually stops just because
+  // the image isn't currently being written to.
+  function uiClockTick() {
+    if (phase !== 'scanning') return;
+    elapsedLabel.textContent = formatElapsed(raceElapsedMs());
+    uiClockRAF = requestAnimationFrame(uiClockTick);
   }
 
   function startScan() {
@@ -459,18 +468,18 @@
     scanCanvas.width = 4000;
     scanCanvas.height = video.videoHeight;
     writeX = 0;
-    captureActiveMs = 0;
     columnTimestamps = [];
     zeroMs = 0;
+    scanStartPerf = performance.now();
 
     phase = 'scanning';
     finishBtn.style.display = 'inline-block';
     beginCapturing();
+    uiClockRAF = requestAnimationFrame(uiClockTick);
   }
 
   function beginCapturing() {
     capturing = true;
-    activeSegmentStart = performance.now();
 
     setupStage.classList.add('hidden');
     lineMarker.style.display = 'none';
@@ -491,7 +500,6 @@
 
   function pauseCapturing() {
     capturing = false;
-    captureActiveMs += performance.now() - activeSegmentStart;
     if (scanRAF) cancelAnimationFrame(scanRAF);
 
     // Show the full live camera (with the finish-line marker, re-adjustable)
@@ -513,11 +521,9 @@
   function finishScan() {
     if (phase !== 'scanning') return;
     phase = 'done';
-    if (capturing) {
-      captureActiveMs += performance.now() - activeSegmentStart;
-      capturing = false;
-    }
+    capturing = false;
     if (scanRAF) cancelAnimationFrame(scanRAF);
+    if (uiClockRAF) cancelAnimationFrame(uiClockRAF);
     scanBadge.classList.remove('live', 'paused');
     finishBtn.style.display = 'none';
 
@@ -593,9 +599,10 @@
     phase = 'setup';
     capturing = false;
     writeX = 0;
-    captureActiveMs = 0;
     columnTimestamps = [];
     zeroMs = 0;
+    if (scanRAF) cancelAnimationFrame(scanRAF);
+    if (uiClockRAF) cancelAnimationFrame(uiClockRAF);
     resultOverlay.classList.remove('show');
     scanViewport.classList.remove('show');
     pipWrap.style.display = 'none';
