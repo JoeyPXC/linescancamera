@@ -6,10 +6,12 @@ single thin vertical slice of each frame — the same underlying idea as a real
 photo-finish (slit-scan) camera, just built from ~30 ordinary video frames a
 second instead of a true high-speed sensor.
 
-**Honest limitation:** time resolution is capped at roughly 1/30th of a
-second per slice — noticeably coarser than real photo-finish gear. Good for
-casual use (practice, away meets without your real equipment) where you don't
-need hundredth-of-a-second precision. Not a replacement for FinishLynx.
+**Honest limitation:** time resolution depends on your phone's actual camera
+frame rate — the app now asks for 60fps (previously 30fps), which should
+roughly double precision on phones that support it, but it's still not a true
+high-speed sensor. Good for casual use (practice, away meets without your
+real equipment) where you don't need hundredth-of-a-second precision. Not a
+replacement for FinishLynx.
 
 ## How to use it
 
@@ -43,7 +45,8 @@ Same process as Stopwatch Video:
 
 ## Known limitations (first version)
 
-- Time resolution ≈ 1/30th of a second per slice (camera frame rate dependent).
+- Time resolution depends on actual camera frame rate delivered (requesting
+  60fps, but the device/browser may grant less).
 - Finish-line position is set once per scan — if the camera moves, the line
   moves with the frame, not with the real world.
 - Very long scans (many minutes) use more memory as the image grows; fine for
